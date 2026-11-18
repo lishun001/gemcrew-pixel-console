@@ -9,6 +9,7 @@ fail() {
 
 if [[ ${1:-} == --help ]]; then
   printf '%s\n' '在装有 Node.js 20+ 的 systemd Linux 上，从项目目录运行 sudo bash deploy-linux.sh。' \
+    '网站服务默认使用 root 运行，可通过 APP_USER 指定其他账号。' \
     '可用 sudo env APP_USER=用户名 NODE_BIN=/usr/bin/node PORT=14173 NAS_SHARE=//服务器/共享名 bash deploy-linux.sh 指定配置。'
   exit 0
 fi
@@ -17,7 +18,7 @@ fi
 (( EUID == 0 )) || fail '请运行 sudo bash deploy-linux.sh。'
 
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-app_user=${APP_USER:-${SUDO_USER:-}}
+app_user=${APP_USER:-root}
 port=${PORT:-14173}
 nas_share=${NAS_SHARE:-//192.168.1.5/ArtPuzzle}
 node_bin=${NODE_BIN:-$(command -v node || true)}
@@ -29,10 +30,8 @@ unit_dir=/etc/systemd/system
 app_unit=gemcrew-pixel-console.service
 managed_marker='# Managed by GemCrew deploy-linux.sh'
 
-[[ -n "$app_user" ]] || fail '请从普通用户的终端运行 sudo，或通过 APP_USER 指定运行网站的用户。'
 app_uid=$(id -u -- "$app_user") || fail '找不到应用用户。'
 app_gid=$(id -g -- "$app_user")
-(( app_uid != 0 )) || fail 'APP_USER 必须是普通用户。'
 [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= 65535 )) || fail 'PORT 必须在 1 到 65535 之间。'
 [[ "$nas_share" =~ ^//(\[[[:xdigit:]:]+\]|[A-Za-z0-9._-]+)/[^/[:space:][:cntrl:]\\]+$ ]] ||
   fail 'NAS_SHARE 请使用 //服务器/共享名 的格式。'
@@ -42,7 +41,7 @@ version=$(runuser -u "$app_user" -- "$node_bin" --version) || fail '应用用户
 [[ "$version" =~ ^v([0-9]+)\. ]] && (( BASH_REMATCH[1] >= 20 )) || fail '项目需要 Node.js 20 或以上版本。'
 runuser -u "$app_user" -- test -w "$project_dir" || fail '应用用户需要写入项目目录，以保存 used-assets.json。'
 for file in server.mjs public/index.html public/app.js public/styles.css; do
-  runuser -u "$app_user" -- test -r "$project_dir/$file" || fail "应用用户无法读取 ¤{file}。"
+  runuser -u "$app_user" -- test -r "$project_dir/$file" || fail "应用用户无法读取 ${file}。"
 done
 if [[ -e "$project_dir/used-assets.json" ]]; then
   runuser -u "$app_user" -- test -r "$project_dir/used-assets.json" || fail '应用用户无法读取现有的 used-assets.json。'
@@ -71,11 +70,11 @@ else
 fi
 for unit in "${units[@]}"; do
   fragment=$(systemctl show --property=FragmentPath --value "$unit" 2>/dev/null || true)
-  [[ -z "$fragment" || "$fragment" == "$unit_dir/$unit" ]] || fail "已有独立配置 ¤{fragment}，请先核对。"
+  [[ -z "$fragment" || "$fragment" == "$unit_dir/$unit" ]] || fail "已有独立配置 ${fragment}，请先核对。"
   destination=$unit_dir/$unit
   if [[ -e "$destination" || -L "$destination" ]]; then
     [[ ! -L "$destination" && -f "$destination" && $(head -n 1 "$destination") == "$managed_marker" ]] ||
-      fail "已存在 ¤{destination}，请备份并移开原有手动配置后重试。"
+      fail "已存在 ${destination}，请备份并移开原有手动配置后重试。"
   fi
 done
 
@@ -103,7 +102,7 @@ fi
 
 if [[ -z "$fstab" ]]; then
   if [[ ! -e "$credentials_file" && ! -L "$credentials_file" ]]; then
-    [[ -t 0 ]] || fail "请预先创建 root 专用的 ¤{credentials_file}，或在交互终端运行脚本。"
+    [[ -t 0 ]] || fail "请预先创建 root 专用的 ${credentials_file}，或在交互终端运行脚本。"
     if [[ ! -e "$credentials_dir" && ! -L "$credentials_dir" ]]; then
       install -d -m 0700 "$credentials_dir"
     fi
@@ -122,7 +121,7 @@ if [[ -z "$fstab" ]]; then
     fi
     unset nas_user nas_password
   fi
-  [[ -f "$credentials_file" && ! -L "$credentials_file" ]] || fail "无效的凭据文件 ¤{credentials_file}。"
+  [[ -f "$credentials_file" && ! -L "$credentials_file" ]] || fail "无效的凭据文件 ${credentials_file}。"
   case "$(stat -c '%u:%a' -- "$credentials_file")" in
     0:600|0:400) ;;
     *) fail "$credentials_file 须由 root 持有，权限设为 0600 或 0400。" ;;
