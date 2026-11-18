@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#11141a">
+  <title>GemCrew · 像素素材库</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="icon-open" viewBox="0 0 24 24"><path d="M3 18V7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v2M3 18a1 1 0 0 0 1 1h14a2 2 0 0 0 2-1.5l2-5a1 1 0 0 0-1-1.5H7a2 2 0 0 0-2 1.5Z"/></symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24"><path d="M10 13.5l4-4m-6 5-1 1a3 3 0 0 0 4 4l4-4a3 3 0 0 0 0-4m1-2 1-1a3 3 0 0 0-4-4l-4 4a3 3 0 0 0 0 4"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 12M4 12l2.3 6A7 7 0 0 0 18 17"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="icon-filter" viewBox="0 0 24 24"><path d="M4 7h8m4 0h4M4 17h4m4 0h8"/><circle cx="14" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="icon-bookmark" viewBox="0 0 24 24"><path d="M6 5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v15l-6-4-6 4Z"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="icon-left" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+    <symbol id="icon-up" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="icon-expand" viewBox="0 0 24 24"><path d="M14 5h5v5M10 19H5v-5M19 5l-5 5m-4 4-5 5"/></symbol>
+    <symbol id="icon-image" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="9" cy="9" r="1.4"/><path d="m4 17 4-4 3 3 4-5 5 6"/></symbol>
+    <symbol id="icon-warning" viewBox="0 0 24 24"><path d="M12 8v5m0 3h.01M10.3 4.8 3.1 17.4A1.7 1.7 0 0 0 4.6 20h14.8a1.7 1.7 0 0 0 1.5-2.6L13.7 4.8a2 2 0 0 0-3.4 0Z"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M10 2h4v4h4v4h4v4h-4v4h-4v4h-4v-4H6v-4H2v-4h4V6h4z"/><path class="brand-spark" d="M10 6h4v4h-4zM6 10h4v4H6z"/></svg>
+        </div>
+        <div><div class="brand-name">GemCrew</div><div class="brand-subtitle">PIXEL CONSOLE</div></div>
+      </div>
+      <div class="topbar-actions">
+        <span class="connection" id="connection" data-state="loading"><span class="connection-dot"></span><span id="connection-label">正在读取</span></span>
+        <button class="button" type="button" id="connect-nas" hidden><svg aria-hidden="true"><use href="#icon-link"/></svg>连接 NAS</button>
+        <button class="button button-primary" type="button" id="choose-folder"><svg><use href="#icon-open"/></svg>切换目录</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="heading">
+      <h1>像素素材库</h1>
+      <div class="source">
+        <div class="source-icon"><svg aria-hidden="true"><use href="#icon-folder"/></svg></div>
+        <div class="source-text">
+          <span class="source-label">素材目录</span>
+          <span id="source-path" class="source-path">正在读取目录…</span>
+        </div>
+        <span id="source-scope" class="source-scope" hidden>包含子目录</span>
+        <button class="button icon-button refresh-button" type="button" id="refresh" title="刷新目录" aria-label="刷新目录" disabled><svg><use href="#icon-refresh"/></svg></button>
+      </div>
+    </section>
+
+    <div class="workspace">
+      <aside class="filters" aria-labelledby="filter-heading">
+        <div class="filter-header">
+          <h2 id="filter-heading"><svg aria-hidden="true"><use href="#icon-filter"/></svg>字段筛选</h2>
+          <button class="text-button" type="button" id="reset-filters" disabled>重置</button>
+        </div>
+        <div class="filter-fields" id="filter-fields"></div>
+        <p class="filter-note">网格宽高以格计。日期序号由日期和当日序号组成。</p>
+      </aside>
+
+      <section class="gallery" aria-labelledby="gallery-heading">
+        <div class="gallery-header">
+          <div class="gallery-title">
+            <h2 id="gallery-heading">图片预览</h2>
+            <span class="asset-count" id="asset-count" aria-live="polite">—</span>
+          </div>
+          <label class="search">
+            <svg aria-hidden="true"><use href="#icon-search"/></svg>
+            <input id="search" type="search" placeholder="搜索文件名" aria-label="搜索文件名" autocomplete="off" disabled>
+          </label>
+        </div>
+        <div class="active-filters" id="active-filters" hidden></div>
+        <div class="scan-warning" id="scan-warning" hidden></div>
+        <div class="asset-grid" id="asset-grid"></div>
+        <div class="empty-state" id="empty-state" aria-live="polite" hidden></div>
+        <nav class="pagination" id="pagination" aria-label="图片分页" hidden>
+          <button class="button icon-button" id="previous" type="button" aria-label="上一页"><svg><use href="#icon-left"/></svg></button>
+          <span id="page-number"></span>
+          <button class="button icon-button" id="next" type="button" aria-label="下一页"><svg><use href="#icon-right"/></svg></button>
+        </nav>
+      </section>
+    </div>
+  </main>
+
+  <dialog class="nas-dialog" id="nas-dialog" aria-labelledby="nas-heading">
+    <div class="dialog-header">
+      <h2 id="nas-heading">连接 NAS</h2>
+      <button class="button icon-button" data-close type="button" aria-label="关闭"><svg><use href="#icon-close"/></svg></button>
+    </div>
+    <form id="nas-form">
+      <label class="path-label" id="nas-address-label" for="nas-address">SMB 共享地址</label>
+      <div class="path-entry">
+        <input id="nas-address" type="text" placeholder="smb://nas.local/素材" aria-describedby="nas-help"
+          autocapitalize="off" autocomplete="off" spellcheck="false" required>
+      </div>
+      <p class="nas-help" id="nas-help">如需登录，请在 Finder 中输入 NAS 账号和密码。</p>
+      <p class="nas-status" id="nas-status" role="status" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" id="browse-mounts" type="button">浏览挂载卷</button>
+        <button class="button button-primary" id="nas-submit" type="submit">连接</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="folder-dialog" id="folder-dialog" aria-labelledby="folder-heading">
+    <div class="dialog-header">
+      <h2 id="folder-heading">选择素材目录</h2>
+      <button class="button icon-button" data-close type="button" aria-label="关闭"><svg><use href="#icon-close"/></svg></button>
+    </div>
+    <form id="folder-form">
+      <label class="path-label" for="folder-path">本机挂载路径</label>
+      <div class="path-entry">
+        <input id="folder-path" name="folder-path" type="text" autocomplete="off" spellcheck="false" required>
+        <button class="button" type="button" id="browse-path">浏览</button>
+      </div>
+      <div class="folder-browser">
+        <div class="folder-toolbar">
+          <button class="button browser-button" type="button" id="volumes"><svg><use href="#icon-folder"/></svg>挂载卷</button>
+          <button class="button browser-button" type="button" id="parent" disabled><svg><use href="#icon-up"/></svg>上一级</button>
+        </div>
+        <div class="folder-list" id="folder-list" aria-live="polite"></div>
+      </div>
+      <p class="folder-error" id="folder-error" role="alert" hidden></p>
+      <label class="subfolders"><input type="checkbox" id="recursive" checked>包含子目录中的图片</label>
+      <div class="dialog-actions">
+        <button class="button" data-close type="button">取消</button>
+        <button class="button button-primary" type="submit" id="load-path">读取图片</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="detail-dialog" id="detail-dialog" aria-labelledby="detail-heading">
+    <div class="dialog-header">
+      <h2 id="detail-heading">图片详情</h2>
+      <button class="button icon-button" data-close type="button" aria-label="关闭"><svg><use href="#icon-close"/></svg></button>
+    </div>
+    <div class="detail-body" id="detail-body"></div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <template id="asset-template">
+    <article class="asset-card">
+      <div class="asset-stage">
+        <button class="asset-preview checkerboard" type="button">
+          <img loading="lazy" decoding="async" alt="">
+          <span class="preview-fallback" hidden><svg aria-hidden="true"><use href="#icon-image"/></svg>预览不可用</span>
+          <span class="thumbnail-format"></span>
+          <span class="expand-icon" aria-hidden="true"><svg><use href="#icon-expand"/></svg></span>
+        </button>
+      </div>
+      <div class="asset-info">
+        <div class="asset-text">
+          <button class="asset-name" type="button"></button>
+          <div class="asset-meta"><span class="asset-dimensions"></span><span class="asset-location"></span></div>
+        </div>
+        <button class="button copy-button" type="button"><svg aria-hidden="true"><use href="#icon-copy"/></svg><span>复制路径</span></button>
+      </div>
+    </article>
+  </template>
+</body>
+</html>
