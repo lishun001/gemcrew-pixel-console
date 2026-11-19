@@ -12,6 +12,8 @@ sudo bash deploy-linux.sh
 
 网站默认以 `root` 运行，端口为 `14173`。在 `root` 终端可直接运行 `bash deploy-linux.sh`。首次运行时按提示填写 NAS 账号和密码。已有匹配的 `/etc/fstab` 自动挂载配置可以继续使用。用 `bash deploy-linux.sh --help` 查看指定运行用户、Node.js 路径、端口或共享地址的方法。
 
+再次运行脚本时会沿用已有服务的 Node.js 路径、端口和监听地址。需要调整时，可以显式传入 `NODE_BIN`、`PORT` 或 `LAN_HOST`。
+
 部署完成后，从客户端运行 SSH 转发命令，将 `用户名@Linux服务器` 换成实际登录地址，然后打开 [素材库](http://127.0.0.1:14173/)。
 
 ```bash

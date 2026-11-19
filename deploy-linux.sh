@@ -10,6 +10,7 @@ fail() {
 if [[ ${1:-} == --help ]]; then
   printf '%s\n' '在装有 Node.js 20+ 的 systemd Linux 上，从项目目录运行 sudo bash deploy-linux.sh。' \
     '网站服务默认使用 root 运行，可通过 APP_USER 指定其他账号。' \
+    '重复部署时默认沿用已部署服务的 Node.js、端口和监听地址。' \
     '内网访问示例 LAN_HOST=192.168.3.151 bash deploy-linux.sh。' \
     '可用 sudo env APP_USER=用户名 NODE_BIN=/usr/bin/node PORT=14173 NAS_SHARE=//服务器/共享名 bash deploy-linux.sh 指定配置。'
   exit 0
@@ -20,10 +21,7 @@ fi
 
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 app_user=${APP_USER:-root}
-port=${PORT:-14173}
-listen_host=${LAN_HOST:-127.0.0.1}
 nas_share=${NAS_SHARE:-//192.168.1.5/ArtPuzzle}
-node_bin=${NODE_BIN:-$(command -v node || true)}
 mount_point=/Volumes/ArtPuzzle
 image_root=$mount_point/GemCrew/pixel
 credentials_dir=/etc/gemcrew
@@ -31,6 +29,28 @@ credentials_file=$credentials_dir/artpuzzle.credentials
 unit_dir=/etc/systemd/system
 app_unit=gemcrew-pixel-console.service
 managed_marker='# Managed by GemCrew deploy-linux.sh'
+
+exec 9>/run/gemcrew-pixel-console-deploy.lock
+flock -n 9 || fail '已有部署在运行。'
+systemctl show --property=Version --value >/dev/null || fail '无法连接系统的 systemd 管理器。'
+
+saved_node=
+saved_port=
+saved_host=
+installed_unit=$unit_dir/$app_unit
+if [[ -f "$installed_unit" && ! -L "$installed_unit" && $(head -n 1 "$installed_unit") == "$managed_marker" ]]; then
+  saved_port=$(sed -n 's/^Environment=PORT=//p' "$installed_unit")
+  saved_host=$(sed -n 's/^Environment=LAN_HOST=//p' "$installed_unit")
+  exec_start=$(systemctl show --property=ExecStart --value "$app_unit" 2>/dev/null || true)
+  if [[ "$exec_start" == '{ path='*' ; argv[]='* ]]; then
+    saved_node=${exec_start#'{ path='}
+    saved_node=${saved_node%%' ; argv[]='*}
+    if [[ "$saved_node" != /* || ! -x "$saved_node" ]]; then saved_node=; fi
+  fi
+fi
+port=${PORT:-${saved_port:-14173}}
+listen_host=${LAN_HOST:-${saved_host:-127.0.0.1}}
+node_bin=${NODE_BIN:-${saved_node:-$(command -v node || true)}}
 
 app_uid=$(id -u -- "$app_user") || fail '找不到应用用户。'
 app_gid=$(id -g -- "$app_user")
@@ -40,7 +60,8 @@ app_gid=$(id -g -- "$app_user")
 [[ "$project_dir" != *[[:cntrl:]]* && "$node_bin" == /* && "$node_bin" != *[[:cntrl:]]* ]] ||
   fail '请先安装 Node.js 24 LTS，或用 NODE_BIN 指定 Node.js 的绝对路径。'
 version=$(runuser -u "$app_user" -- "$node_bin" --version) || fail '应用用户无法运行 Node.js。'
-[[ "$version" =~ ^v([0-9]+)\. ]] && (( BASH_REMATCH[1] >= 20 )) || fail '项目需要 Node.js 20 或以上版本。'
+[[ "$version" =~ ^v([0-9]+)\. ]] && (( BASH_REMATCH[1] >= 20 )) ||
+  fail "项目需要 Node.js 20 或以上版本，当前为 ${version}（${node_bin}）。"
 runuser -u "$app_user" -- "$node_bin" -e '
   const host = process.argv[1];
   if (!require("node:net").isIPv4(host) || host === "0.0.0.0") process.exitCode = 1;
@@ -53,10 +74,6 @@ if [[ -e "$project_dir/used-assets.json" ]]; then
   runuser -u "$app_user" -- test -r "$project_dir/used-assets.json" || fail '应用用户无法读取现有的 used-assets.json。'
 fi
 runuser -u "$app_user" -- "$node_bin" --check "$project_dir/server.mjs"
-
-exec 9>/run/gemcrew-pixel-console-deploy.lock
-flock -n 9 || fail '已有部署在运行。'
-systemctl show --property=Version --value >/dev/null || fail '无法连接系统的 systemd 管理器。'
 
 mount_unit=$(systemd-escape --path --suffix=mount "$mount_point")
 automount_unit=$(systemd-escape --path --suffix=automount "$mount_point")
