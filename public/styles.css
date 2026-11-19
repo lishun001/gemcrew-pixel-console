@@ -151,6 +151,9 @@ h1, h2, p { margin: 0; }
 .text-button:hover:not(:disabled) { text-decoration: underline; }
 .text-button:disabled { color: var(--muted); opacity: .7; }
 .filter-fields { display: grid; gap: 9px; padding: 14px; }
+.filter-group + .filter-group { border-top: 1px solid var(--border); }
+.filter-group h3 { margin: 12px 14px 0; color: var(--muted); font-size: 12px; font-weight: 650; }
+.filter-group .filter-fields { padding-top: 10px; }
 .filter-field { display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 7px; }
 .filter-field label { color: var(--secondary); font-size: 13px; }
 .filter-select {

@@ -21,8 +21,11 @@ const loadPath = byId('load-path');
 const recursive = byId('recursive');
 const refresh = byId('refresh');
 const fieldChoices = new Map();
+const markSelects = new Map();
 const pendingUsage = new Set();
 const feedbackLabels = { unusable: '不可使用', revision: '修改反馈' };
+const markLabels = { used: '已使用', ...feedbackLabels };
+const feedbackMarkNames = { unusable: '不可使用', revision: '需修改' };
 const patternFieldNames = [
   '素材类型', '图案模式', '有效格数', '网格宽度', '网格高度',
   '颜色数', '制作人', '日期序号', '导出标记',
@@ -138,6 +141,7 @@ async function loadDirectory(folder, includeSubfolders, { fromDialog = false, ke
     if (!keepFilters) {
       search.value = '';
       fieldChoices.clear();
+      clearMarkFilters();
     }
     try {
       localStorage.setItem(storageKey, JSON.stringify({ folder: state.folder, recursive: state.recursive }));
@@ -179,22 +183,51 @@ function fieldLabel(value) {
   return value === '' ? '空字段' : value;
 }
 
+function filterRow(id, name) {
+  const row = element('div', 'filter-field');
+  const label = element('label', '', name);
+  const select = element('select', 'filter-select');
+  const wrap = element('div', 'select-wrap');
+  label.htmlFor = select.id = id;
+  wrap.append(select, icon('right'));
+  row.append(label, wrap);
+  return { row, select };
+}
+
+function setupMarkFilters() {
+  const rows = Object.entries(markLabels).map(([type, label]) => {
+    const { row, select } = filterRow('mark-' + type, label);
+    select.append(new Option('全部', ''), new Option('已标记', 'marked'), new Option('未标记', 'unmarked'));
+    select.addEventListener('change', () => {
+      state.page = 0;
+      renderGallery();
+    });
+    markSelects.set(type, select);
+    return row;
+  });
+  byId('mark-filters').replaceChildren(...rows);
+}
+
+function clearMarkFilters() {
+  for (const select of markSelects.values()) select.value = '';
+}
+
+function assetHasMark(asset, type) {
+  return type === 'used' ? Boolean(asset.used) : asset.feedback?.[type] !== undefined;
+}
+
 function renderFields() {
   const values = [];
   for (const asset of state.images) {
     asset.fields.forEach((value, index) => (values[index] ??= new Set()).add(value));
   }
   const rows = values.map((options, index) => {
-    const row = element('div', 'filter-field');
-    const label = element('label', '', fieldName(index));
-    const select = element('select', 'filter-select');
-    const wrap = element('div', 'select-wrap');
+    const { row, select } = filterRow('field-' + (index + 1), fieldName(index));
     const orderedOptions = [...options].sort(collator.compare);
     if (state.images.some(asset => asset.fields.length <= index)) orderedOptions.push(null);
     if (fieldChoices.has(index) && !orderedOptions.includes(fieldChoices.get(index))) {
       orderedOptions.push(fieldChoices.get(index));
     }
-    label.htmlFor = select.id = 'field-' + (index + 1);
     select.append(new Option('全部', ''));
     orderedOptions.forEach((value, optionIndex) => {
       select.append(new Option(fieldLabel(value), String(optionIndex)));
@@ -208,8 +241,6 @@ function renderFields() {
       state.page = 0;
       renderGallery();
     });
-    wrap.append(select, icon('right'));
-    row.append(label, wrap);
     return row;
   });
   for (const index of fieldChoices.keys()) {
@@ -220,6 +251,7 @@ function renderFields() {
 
 function clearFilters() {
   fieldChoices.clear();
+  clearMarkFilters();
   search.value = '';
   state.page = 0;
   for (const select of filters.querySelectorAll('select')) {
@@ -229,25 +261,29 @@ function clearFilters() {
   renderGallery();
 }
 
-function renderActiveFilters() {
-  const active = byId('active-filters');
-  const chips = [...fieldChoices].sort(([a], [b]) => a - b).map(([index, value]) => {
-    const chip = element('button', 'filter-chip');
-    chip.type = 'button';
-    const name = fieldName(index);
-    chip.append(element('span', '', name + ' · ' + fieldLabel(value)), icon('close'));
-    chip.setAttribute('aria-label', '移除' + name + '筛选');
-    chip.addEventListener('click', () => {
-      fieldChoices.delete(index);
-      const select = byId('field-' + (index + 1));
-      select.value = '';
-      select.classList.remove('is-active');
-      select.focus();
-      state.page = 0;
-      renderGallery();
-    });
-    return chip;
+function filterChip(name, value, select, clear) {
+  const chip = element('button', 'filter-chip');
+  chip.type = 'button';
+  chip.append(element('span', '', name + ' · ' + value), icon('close'));
+  chip.setAttribute('aria-label', '移除' + name + '筛选');
+  chip.addEventListener('click', () => {
+    clear?.();
+    select.value = '';
+    select.classList.remove('is-active');
+    select.focus();
+    state.page = 0;
+    renderGallery();
   });
+  return chip;
+}
+
+function renderActiveFilters(activeMarks) {
+  const active = byId('active-filters');
+  const marks = activeMarks.map(([type, marked]) =>
+    filterChip(markLabels[type], marked ? '已标记' : '未标记', markSelects.get(type)));
+  const fields = [...fieldChoices].sort(([a], [b]) => a - b).map(([index, value]) =>
+    filterChip(fieldName(index), fieldLabel(value), byId('field-' + (index + 1)), () => fieldChoices.delete(index)));
+  const chips = [...marks, ...fields];
   active.replaceChildren(...chips);
   active.hidden = chips.length === 0;
 }
@@ -267,15 +303,23 @@ function setEmpty(title, message, actionText, action) {
 }
 
 function renderGallery() {
+  const activeMarks = [];
+  for (const [type, select] of markSelects) {
+    select.disabled = state.images.length === 0 || Boolean(type === 'used' ? state.usageProblem : state.feedbackProblem);
+    if (select.disabled) select.value = '';
+    select.classList.toggle('is-active', select.value !== '');
+    if (select.value) activeMarks.push([type, select.value === 'marked']);
+  }
   const query = search.value.trim().toLowerCase();
-  const filtered = fieldChoices.size > 0 || query !== '';
+  const filtered = activeMarks.length > 0 || fieldChoices.size > 0 || query !== '';
   const activeFields = [...fieldChoices];
   const matches = filtered ? state.images.filter(asset =>
     asset.name.toLowerCase().includes(query) &&
-    activeFields.every(([index, value]) => (asset.fields[index] ?? null) === value)
+    activeFields.every(([index, value]) => (asset.fields[index] ?? null) === value) &&
+    activeMarks.every(([type, marked]) => assetHasMark(asset, type) === marked)
   ) : state.images;
 
-  renderActiveFilters();
+  renderActiveFilters(activeMarks);
   reset.disabled = !filtered;
   search.disabled = state.images.length === 0;
   byId('asset-count').textContent = !state.folder ? '—' : filtered ?
@@ -419,6 +463,7 @@ async function toggleUsage(asset, button) {
     scanRequest?.usageUpdates.set(absolute, used);
     const visible = state.images.find(entry => entry.absolute === absolute);
     if (visible) visible.used = used;
+    if (markSelects.get('used')?.value) renderGallery();
     showToast(used ? '已标记为已使用' : '已取消使用标记', button);
   } catch (error) {
     showToast(error.message === 'Failed to fetch' ? '保存失败，请检查本地服务是否运行。' : error.message, button);
@@ -430,13 +475,12 @@ async function toggleUsage(asset, button) {
 
 function paintFeedbackButton(button, asset) {
   const type = button.dataset.feedbackType;
-  const saved = asset.feedback?.[type] !== undefined;
+  const saved = assetHasMark(asset, type);
   const label = feedbackLabels[type];
   button.disabled = !config.feedbackLimits?.[type] || Boolean(state.feedbackProblem);
   button.dataset.saved = String(saved);
   button.setAttribute('aria-label', saved ? '编辑' + label : label);
-  const symbol = type === 'unusable' ? 'bookmark' : 'comment';
-  button.replaceChildren(icon(saved ? 'check' : symbol), element('span', '', label));
+  button.replaceChildren(icon(saved ? 'check' : 'bookmark'), element('span', '', label));
 }
 
 function feedbackButtons(asset) {
@@ -467,7 +511,7 @@ function updateFeedbackForm() {
   feedbackComment.setAttribute('aria-invalid', String(overLimit));
   feedbackComment.disabled = saving;
   feedbackSave.disabled = saving || overLimit;
-  const saveLabel = type === 'unusable' ? (marked ? '保存评论' : '标记为不可使用') : '保存反馈';
+  const saveLabel = marked ? '保存评论' : '标记为' + feedbackMarkNames[type];
   feedbackSave.textContent = saving ? '正在保存…' : saveLabel;
   feedbackRemove.disabled = saving;
   for (const button of feedbackDialog.querySelectorAll('[data-close]')) button.disabled = saving;
@@ -482,7 +526,7 @@ function openFeedback(asset, type, button) {
   byId('feedback-copy-note').hidden = type !== 'unusable';
   feedbackComment.value = comment ?? '';
   feedbackRemove.hidden = comment === undefined;
-  feedbackRemove.textContent = type === 'unusable' ? '取消不可使用标记' : '移除反馈';
+  feedbackRemove.textContent = type === 'unusable' ? '取消不可使用标记' : '取消修改标记';
   showFeedbackError();
   updateFeedbackForm();
   feedbackDialog.showModal();
@@ -501,9 +545,8 @@ async function submitFeedback(comment) {
     const { feedback } = await api(route, undefined, { method: 'PUT', body: { type, comment } });
     applyAssetFeedback(asset, feedback);
     feedbackDialog.close();
-    const message = type === 'unusable'
-      ? (comment === null ? '已取消不可使用标记' : (editor.marked ? '已保存评论' : '已标记为不可使用'))
-      : (comment === null ? '已移除反馈' : '已保存反馈');
+    const message = comment === null ? '已取消标记' :
+      editor.marked ? '已保存评论' : '已标记为' + feedbackMarkNames[type];
     showToast(message, button);
   } catch (error) {
     showFeedbackError(error.message);
@@ -516,7 +559,7 @@ async function submitFeedback(comment) {
 }
 
 function copyBlockedMessage(asset) {
-  if (asset.feedback?.unusable !== undefined) return '已标记为不可使用，无法复制路径。';
+  if (assetHasMark(asset, 'unusable')) return '已标记为不可使用，无法复制路径。';
   return state.feedbackProblem ? '反馈状态暂时无法读取，无法复制路径。' : '';
 }
 
@@ -549,9 +592,12 @@ function paintDetailPath(group, asset) {
 
 function applyAssetFeedback(asset, feedback) {
   const absolute = asset.absolute;
+  const visible = state.images.find(entry => entry.absolute === absolute);
+  const previous = visible ?? asset;
+  const needsFilter = Object.keys(feedbackLabels).some(type =>
+    markSelects.get(type)?.value && assetHasMark(previous, type) !== (feedback[type] !== undefined));
   asset.feedback = feedback;
   scanRequest?.feedbackUpdates.set(absolute, feedback);
-  const visible = state.images.find(entry => entry.absolute === absolute);
   if (visible) visible.feedback = feedback;
   for (const button of document.querySelectorAll('.feedback-button, .copy-button, .asset-name')) {
     if (button.dataset.assetPath !== absolute) continue;
@@ -561,6 +607,7 @@ function applyAssetFeedback(asset, feedback) {
   }
   const pathGroup = detailBody.querySelector('.detail-path');
   if (pathGroup?.dataset.assetPath === absolute) paintDetailPath(pathGroup, asset);
+  if (needsFilter) renderGallery();
 }
 
 async function copyPath(asset, button) {
@@ -775,6 +822,7 @@ feedbackDialog.addEventListener('cancel', event => {
 feedbackDialog.addEventListener('close', () => { feedbackEditor = undefined; });
 
 async function initialize() {
+  setupMarkFilters();
   renderGallery();
   try {
     config = await api('config');
