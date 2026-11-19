@@ -10,6 +10,7 @@ fail() {
 if [[ ${1:-} == --help ]]; then
   printf '%s\n' '在装有 Node.js 20+ 的 systemd Linux 上，从项目目录运行 sudo bash deploy-linux.sh。' \
     '网站服务默认使用 root 运行，可通过 APP_USER 指定其他账号。' \
+    '内网访问示例 LAN_HOST=192.168.3.151 bash deploy-linux.sh。' \
     '可用 sudo env APP_USER=用户名 NODE_BIN=/usr/bin/node PORT=14173 NAS_SHARE=//服务器/共享名 bash deploy-linux.sh 指定配置。'
   exit 0
 fi
@@ -20,6 +21,7 @@ fi
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 app_user=${APP_USER:-root}
 port=${PORT:-14173}
+listen_host=${LAN_HOST:-127.0.0.1}
 nas_share=${NAS_SHARE:-//192.168.1.5/ArtPuzzle}
 node_bin=${NODE_BIN:-$(command -v node || true)}
 mount_point=/Volumes/ArtPuzzle
@@ -39,6 +41,10 @@ app_gid=$(id -g -- "$app_user")
   fail '请先安装 Node.js 24 LTS，或用 NODE_BIN 指定 Node.js 的绝对路径。'
 version=$(runuser -u "$app_user" -- "$node_bin" --version) || fail '应用用户无法运行 Node.js。'
 [[ "$version" =~ ^v([0-9]+)\. ]] && (( BASH_REMATCH[1] >= 20 )) || fail '项目需要 Node.js 20 或以上版本。'
+runuser -u "$app_user" -- "$node_bin" -e '
+  const host = process.argv[1];
+  if (!require("node:net").isIPv4(host) || host === "0.0.0.0") process.exitCode = 1;
+' "$listen_host" || fail 'LAN_HOST 必须是服务器网卡的具体 IPv4 地址。'
 runuser -u "$app_user" -- test -w "$project_dir" || fail '应用用户需要写入项目目录，以保存 used-assets.json。'
 for file in server.mjs public/index.html public/app.js public/styles.css; do
   runuser -u "$app_user" -- test -r "$project_dir/$file" || fail "应用用户无法读取 ${file}。"
@@ -167,6 +173,7 @@ After=$automount_unit
 User=$app_uid
 Group=$app_gid
 Environment=PORT=$port
+Environment=LAN_HOST=$listen_host
 Environment=NAS_MOUNT_POINT=$mount_point
 Environment=NAS_IMAGE_ROOT=$image_root
 ExecStart=$(unit_argument ":$node_bin") $(unit_argument "$project_dir/server.mjs")
@@ -193,9 +200,9 @@ fi
 systemctl enable "$app_unit"
 systemctl restart "$app_unit"
 
-if ! runuser -u "$app_user" -- "$node_bin" --input-type=module - "$port" "$image_root" <<'JS'
-const [port, root] = process.argv.slice(2);
-const base = 'http://127.0.0.1:' + port;
+if ! runuser -u "$app_user" -- "$node_bin" --input-type=module - "$listen_host" "$port" "$image_root" <<'JS'
+const [host, port, root] = process.argv.slice(2);
+const base = 'http://' + host + ':' + port;
 const headers = { 'X-GemCrew-Console': '1' };
 try {
   for (let attempt = 0; ; attempt++) {
@@ -225,5 +232,7 @@ then
 fi
 
 printf '已部署并验证素材目录 %s\n' "$image_root"
-printf '服务器本机入口 http://127.0.0.1:%s/\n' "$port"
-printf '从客户端访问时可执行 ssh -N -L 127.0.0.1:%s:127.0.0.1:%s 用户名@Linux服务器\n' "$port" "$port"
+printf '网站入口 http://%s:%s/\n' "$listen_host" "$port"
+if [[ "$listen_host" == 127.0.0.1 ]]; then
+  printf '从客户端访问时可执行 ssh -N -L 127.0.0.1:%s:127.0.0.1:%s 用户名@Linux服务器\n' "$port" "$port"
+fi

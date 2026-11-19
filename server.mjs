@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { isIPv4 } from 'node:net';
 import { constants } from 'node:fs';
 import { open, opendir, readdir, realpath, readFile, stat, mkdtemp, rm, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
@@ -10,6 +11,11 @@ import { promisify } from 'node:util';
 import { pipeline } from 'node:stream/promises';
 
 const port = Number(process.env.PORT ?? 4173);
+const listenHost = process.env.LAN_HOST ?? '127.0.0.1';
+const lanEnabled = listenHost !== '127.0.0.1';
+if (!isIPv4(listenHost) || listenHost === '0.0.0.0') {
+  throw new Error('LAN_HOST 必须是服务器网卡的具体 IPv4 地址。');
+}
 const isMac = process.platform === 'darwin';
 const configuredMount = process.platform === 'linux' ? process.env.NAS_MOUNT_POINT?.trim() : '';
 if (configuredMount && (!path.isAbsolute(configuredMount) || path.resolve(configuredMount) === '/')) {
@@ -17,15 +23,23 @@ if (configuredMount && (!path.isAbsolute(configuredMount) || path.resolve(config
 }
 const linuxNasMountPoint = configuredMount ? path.resolve(configuredMount) : '';
 const suggestedFolder = process.env.NAS_IMAGE_ROOT ?? (linuxNasMountPoint || '/Volumes/ArtPuzzle/GemCrew/pixel');
+const lanRoot = lanEnabled ? path.resolve(suggestedFolder) : '';
+if (lanEnabled && (!linuxNasMountPoint || !path.isAbsolute(suggestedFolder) ||
+    !isWithin(linuxNasMountPoint, lanRoot))) {
+  throw new Error('内网模式需要将 NAS_IMAGE_ROOT 配置为 Linux SMB 挂载点内的素材目录。');
+}
 const canConnectNas = isMac || Boolean(linuxNasMountPoint);
-const volumesFolder = linuxNasMountPoint ? path.dirname(linuxNasMountPoint) :
-  isMac ? '/Volumes' : path.parse(homedir()).root;
+const volumesFolder = lanRoot || (linuxNasMountPoint ? path.dirname(linuxNasMountPoint) :
+  isMac ? '/Volumes' : path.parse(homedir()).root);
 const publicFolder = fileURLToPath(new URL('./public/', import.meta.url));
 const usageFile = fileURLToPath(new URL('./used-assets.json', import.meta.url));
+const feedbackFile = fileURLToPath(new URL('./asset-feedback.json', import.meta.url));
+const feedbackLimits = new Map([['unusable', 30], ['revision', 50]]);
 const collator = new Intl.Collator('zh-CN', { numeric: true });
 const runCommand = promisify(execFile);
 const scans = new Map();
 let usageWrites = Promise.resolve();
+let feedbackWrites = Promise.resolve();
 let linuxNasConnection;
 
 const imageTypes = new Map(Object.entries({
@@ -47,6 +61,17 @@ const publicFiles = new Map([
 function sendJson(response, status, data) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(data));
+}
+
+function isWithin(root, item) {
+  const relative = path.relative(root, item);
+  return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+}
+
+function checkLanScope(item) {
+  if (lanRoot && !isWithin(lanRoot, item)) {
+    throw Object.assign(new Error('内网访问仅限配置的 NAS 素材目录。'), { status: 403 });
+  }
 }
 
 function parseSmbAddress(value) {
@@ -154,10 +179,11 @@ async function handleNas(request, response, url) {
   }
   if (linuxNasMountPoint) {
     if (request.method === 'POST') {
-      return sendJson(response, 200, { folder: await connectLinuxNas() });
+      const folder = lanRoot ? await absoluteFolder(lanRoot) : await connectLinuxNas();
+      return sendJson(response, 200, { folder });
     }
     const mounted = hasSmbMount(await linuxMountTypes());
-    return sendJson(response, 200, { folder: mounted ? linuxNasMountPoint : null });
+    return sendJson(response, 200, { folder: mounted ? lanRoot || linuxNasMountPoint : null });
   }
 
   const target = parseSmbAddress(url.searchParams.get('address') ?? '');
@@ -185,6 +211,18 @@ async function readUsage() {
   throw Object.assign(new Error('无法读取已使用记录，请检查项目中的 used-assets.json。'), { status: 500 });
 }
 
+async function writeRecords(file, data, errorMessage) {
+  const temporaryFile = file + '.' + randomUUID() + '.tmp';
+  try {
+    await writeFile(temporaryFile, JSON.stringify(data, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    await rename(temporaryFile, file);
+  } catch {
+    throw Object.assign(new Error(errorMessage), { status: 500 });
+  } finally {
+    await rm(temporaryFile, { force: true }).catch(() => {});
+  }
+}
+
 function saveUsage(absolutePath, used) {
   const write = usageWrites.then(async () => {
     const paths = await readUsage();
@@ -192,22 +230,79 @@ function saveUsage(absolutePath, used) {
     if (used) paths.add(absolutePath);
     else paths.delete(absolutePath);
 
-    const temporaryFile = usageFile + '.' + randomUUID() + '.tmp';
-    try {
-      await writeFile(temporaryFile, JSON.stringify([...paths].sort(), null, 2) + '\n', {
-        flag: 'wx',
-        mode: 0o600,
-      });
-      await rename(temporaryFile, usageFile);
-    } catch {
-      throw Object.assign(new Error('无法保存已使用记录，请检查项目目录的写入权限。'), { status: 500 });
-    } finally {
-      await rm(temporaryFile, { force: true }).catch(() => {});
-    }
+    await writeRecords(usageFile, [...paths].sort(), '无法保存已使用记录，请检查项目目录的写入权限。');
   });
   // 保存失败时，后续请求仍可继续尝试。
   usageWrites = write.catch(() => {});
   return write;
+}
+
+function validComment(type, comment) {
+  return feedbackLimits.has(type) && typeof comment === 'string' &&
+    Array.from(comment).length <= feedbackLimits.get(type);
+}
+
+async function readFeedback() {
+  try {
+    const data = JSON.parse(await readFile(feedbackFile, 'utf8'));
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const entries = Object.entries(data);
+      if (entries.every(([asset, record]) => path.isAbsolute(asset) &&
+          record && typeof record === 'object' && !Array.isArray(record) &&
+          Object.entries(record).every(([type, comment]) => validComment(type, comment)))) {
+        return new Map(entries);
+      }
+    }
+  } catch (error) {
+    if (error.code === 'ENOENT') return new Map();
+  }
+  throw Object.assign(new Error('无法读取图片反馈，请检查项目中的 asset-feedback.json。'), { status: 500 });
+}
+
+function saveFeedback(absolutePath, type, comment) {
+  const write = feedbackWrites.then(async () => {
+    const records = await readFeedback();
+    const feedback = records.get(absolutePath) ?? {};
+    if ((feedback[type] ?? null) === comment) return feedback;
+    if (comment === null) delete feedback[type];
+    else feedback[type] = comment;
+    if (Object.keys(feedback).length) records.set(absolutePath, feedback);
+    else records.delete(absolutePath);
+    await writeRecords(feedbackFile, Object.fromEntries(records), '无法保存图片反馈，请检查项目目录的写入权限。');
+    return feedback;
+  });
+  feedbackWrites = write.catch(() => {});
+  return write;
+}
+
+async function handleFeedback(request, response, asset) {
+  if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] ?? '')) {
+    return sendJson(response, 415, { error: '反馈请求需要使用 JSON。' });
+  }
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of request.iterator({ destroyOnReturn: false })) {
+    size += chunk.length;
+    if (size > 4096) {
+      response.setHeader('Connection', 'close');
+      return sendJson(response, 413, { error: '反馈内容过长。' });
+    }
+    chunks.push(chunk);
+  }
+  let data;
+  try {
+    data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return sendJson(response, 400, { error: '反馈内容格式无效。' });
+  }
+  const { type, comment } = data ?? {};
+  if (!feedbackLimits.has(type) || (comment !== null && typeof comment !== 'string')) {
+    return sendJson(response, 400, { error: '反馈类型或评论内容无效。' });
+  }
+  if (comment !== null && !validComment(type, comment)) {
+    return sendJson(response, 400, { error: '评论最多 ' + feedbackLimits.get(type) + ' 字。' });
+  }
+  return sendJson(response, 200, { feedback: await saveFeedback(asset.absolute, type, comment) });
 }
 
 async function absoluteFolder(value) {
@@ -215,12 +310,14 @@ async function absoluteFolder(value) {
   if (!folder || !path.isAbsolute(folder)) {
     throw Object.assign(new Error('请输入已挂载目录的绝对路径。'), { status: 400 });
   }
-  const absolute = path.normalize(folder);
-  if (linuxNasMountPoint &&
-      (absolute === linuxNasMountPoint || absolute.startsWith(linuxNasMountPoint + path.sep))) {
+  const absolute = lanRoot ? path.resolve(folder) : path.normalize(folder);
+  checkLanScope(absolute);
+  if (linuxNasMountPoint && isWithin(linuxNasMountPoint, absolute)) {
     await connectLinuxNas();
   }
-  if (!(await stat(absolute)).isDirectory()) {
+  const source = lanRoot ? await realpath(absolute) : absolute;
+  checkLanScope(source);
+  if (!(await stat(source)).isDirectory()) {
     throw Object.assign(new Error('请选择一个文件夹。'), { status: 400 });
   }
   return absolute;
@@ -230,13 +327,16 @@ async function scanFolder(folder, recursive, response) {
   const directories = [folder];
   const images = [];
   const root = await realpath(folder);
+  checkLanScope(root);
   let skipped = 0;
 
   while (directories.length && !response.destroyed) {
     const directory = directories.pop();
     let entries;
     try {
-      entries = await readdir(directory, { withFileTypes: true });
+      const source = lanRoot ? await realpath(directory) : directory;
+      checkLanScope(source);
+      entries = await readdir(source, { withFileTypes: true });
     } catch (error) {
       if (directory === folder) throw error;
       skipped++;
@@ -271,6 +371,14 @@ async function scanFolder(folder, recursive, response) {
   } catch (error) {
     usageProblem = error.message;
   }
+  let feedbackRecords = new Map();
+  let feedbackProblem = '';
+  try {
+    await feedbackWrites;
+    feedbackRecords = await readFeedback();
+  } catch (error) {
+    feedbackProblem = error.message;
+  }
   if (response.destroyed) return;
   images.sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.relative, b.relative));
   const scanId = randomUUID();
@@ -281,9 +389,11 @@ async function scanFolder(folder, recursive, response) {
     folder,
     skipped,
     usageProblem,
+    feedbackProblem,
     images: images.map((asset, index) => ({
       ...asset,
       used: usedPaths.has(asset.absolute),
+      feedback: feedbackRecords.get(asset.absolute) ?? {},
       url: '/image/' + scanId + '/' + index,
     })),
   });
@@ -294,8 +404,8 @@ async function serveImage(response, scanId, index) {
   const asset = scan?.images[index];
   if (!asset) return sendJson(response, 404, { error: '图片已失效，请刷新目录。' });
   const source = await realpath(asset.absolute);
-  const relative = path.relative(scan.root, source);
-  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+  checkLanScope(source);
+  if (!isWithin(scan.root, source)) {
     return sendJson(response, 404, { error: '图片已移出所选目录。' });
   }
 
@@ -347,11 +457,13 @@ const server = createServer(async (request, response) => {
   response.setHeader('Referrer-Policy', 'no-referrer');
 
   try {
-    const hosts = ['127.0.0.1', 'localhost'].map(host => host + ':' + server.address().port);
+    const allowedHosts = lanEnabled ? [listenHost] : ['127.0.0.1', 'localhost'];
+    const suffix = server.address().port === 80 ? '' : ':' + server.address().port;
+    const hosts = allowedHosts.map(host => host + suffix);
     if (!hosts.includes(request.headers.host) ||
         request.headers['sec-fetch-site'] === 'cross-site' ||
         (request.headers.origin && request.headers.origin !== 'http://' + request.headers.host)) {
-      return sendJson(response, 403, { error: '请通过本机地址访问。' });
+      return sendJson(response, 403, { error: '请通过服务配置的地址访问。' });
     }
     const url = new URL(request.url, 'http://127.0.0.1');
     if (url.pathname.startsWith('/api/') && request.headers['x-gemcrew-console'] !== '1') {
@@ -359,11 +471,13 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/api/nas') return await handleNas(request, response, url);
 
-    const usage = /^\/api\/usage\/([a-f0-9-]+)\/(\d+)$/.exec(url.pathname);
-    if (usage) {
+    const update = /^\/api\/(usage|feedback)\/([a-f0-9-]+)\/(\d+)$/.exec(url.pathname);
+    if (update) {
       if (request.method !== 'PUT') return sendJson(response, 405, { error: '请求方式无效。' });
-      const asset = scans.get(usage[1])?.images[Number(usage[2])];
+      const [, action, scanId, index] = update;
+      const asset = scans.get(scanId)?.images[Number(index)];
       if (!asset) return sendJson(response, 404, { error: '图片已失效，请刷新目录。' });
+      if (action === 'feedback') return await handleFeedback(request, response, asset);
       const value = url.searchParams.get('used');
       if (value !== '1' && value !== '0') return sendJson(response, 400, { error: '使用状态无效。' });
       const used = value === '1';
@@ -373,15 +487,20 @@ const server = createServer(async (request, response) => {
     if (request.method !== 'GET') return sendJson(response, 405, { error: '请求方式无效。' });
 
     if (url.pathname === '/api/config') {
-      return sendJson(response, 200, { suggestedFolder, volumesFolder, canConnectNas, linuxNasMountPoint });
+      return sendJson(response, 200, {
+        suggestedFolder, volumesFolder, canConnectNas, linuxNasMountPoint,
+        feedbackLimits: Object.fromEntries(feedbackLimits),
+      });
     }
     if (url.pathname === '/api/folders') {
       const folder = await absoluteFolder(url.searchParams.get('path') ?? volumesFolder);
-      const entries = await readdir(folder, { withFileTypes: true });
+      const source = lanRoot ? await realpath(folder) : folder;
+      checkLanScope(source);
+      const entries = await readdir(source, { withFileTypes: true });
       const folders = entries.filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
         .sort((a, b) => collator.compare(a.name, b.name))
         .map(entry => ({ name: entry.name, path: path.join(folder, entry.name) }));
-      return sendJson(response, 200, { folder, parent: path.dirname(folder), folders });
+      return sendJson(response, 200, { folder, parent: folder === lanRoot ? folder : path.dirname(folder), folders });
     }
     if (url.pathname === '/api/assets') {
       const folder = await absoluteFolder(url.searchParams.get('path'));
@@ -424,6 +543,6 @@ server.on('error', error => {
   console.error('素材库启动失败：' + error.message);
   process.exitCode = 1;
 });
-server.listen(port, '127.0.0.1', () => {
-  console.log('GemCrew 像素素材库：http://127.0.0.1:' + server.address().port);
+server.listen(port, listenHost, () => {
+  console.log('GemCrew 像素素材库：http://' + listenHost + ':' + server.address().port);
 });

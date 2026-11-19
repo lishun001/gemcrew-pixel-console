@@ -17,6 +17,7 @@
     <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4 4"/></symbol>
     <symbol id="icon-filter" viewBox="0 0 24 24"><path d="M4 7h8m4 0h4M4 17h4m4 0h8"/><circle cx="14" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
     <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="icon-comment" viewBox="0 0 24 24"><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-9l-5 4v-4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/><path d="M8 11h8"/></symbol>
     <symbol id="icon-bookmark" viewBox="0 0 24 24"><path d="M6 5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v15l-6-4-6 4Z"/></symbol>
     <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
     <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
@@ -147,6 +148,27 @@
     <div class="detail-body" id="detail-body"></div>
   </dialog>
 
+  <dialog class="feedback-dialog" id="feedback-dialog" aria-labelledby="feedback-heading">
+    <div class="dialog-header">
+      <h2 id="feedback-heading"></h2>
+      <button class="button icon-button" data-close type="button" aria-label="关闭"><svg><use href="#icon-close"/></svg></button>
+    </div>
+    <form id="feedback-form">
+      <p class="feedback-asset" id="feedback-asset"></p>
+      <div class="feedback-label">
+        <label class="path-label" for="feedback-comment">评论（选填）</label>
+        <span id="feedback-count"></span>
+      </div>
+      <textarea id="feedback-comment" rows="4" aria-describedby="feedback-count" autofocus></textarea>
+      <p class="folder-error" id="feedback-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button remove-feedback" id="remove-feedback" type="button" hidden>移除反馈</button>
+        <button class="button" data-close type="button">取消</button>
+        <button class="button button-primary" id="save-feedback" type="submit">保存反馈</button>
+      </div>
+    </form>
+  </dialog>
+
   <div class="toast" id="toast" role="status" hidden></div>
 
   <template id="asset-template">
@@ -164,7 +186,9 @@
           <button class="asset-name" type="button"></button>
           <div class="asset-meta"><span class="asset-dimensions"></span><span class="asset-location"></span></div>
         </div>
-        <button class="button copy-button" type="button"><svg aria-hidden="true"><use href="#icon-copy"/></svg><span>复制路径</span></button>
+        <div class="asset-actions">
+          <button class="button copy-button" type="button"><svg aria-hidden="true"><use href="#icon-copy"/></svg><span>复制路径</span></button>
+        </div>
       </div>
     </article>
   </template>

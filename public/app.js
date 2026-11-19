@@ -10,6 +10,10 @@ const nasStatus = byId('nas-status');
 const folderDialog = byId('folder-dialog');
 const detailDialog = byId('detail-dialog');
 const detailBody = byId('detail-body');
+const feedbackDialog = byId('feedback-dialog');
+const feedbackComment = byId('feedback-comment');
+const feedbackSave = byId('save-feedback');
+const feedbackRemove = byId('remove-feedback');
 const folderPath = byId('folder-path');
 const folderList = byId('folder-list');
 const folderError = byId('folder-error');
@@ -18,6 +22,7 @@ const recursive = byId('recursive');
 const refresh = byId('refresh');
 const fieldChoices = new Map();
 const pendingUsage = new Set();
+const feedbackLabels = { unusable: '不可使用', revision: '修改反馈' };
 const patternFieldNames = [
   '素材类型', '图案模式', '有效格数', '网格宽度', '网格高度',
   '颜色数', '制作人', '日期序号', '导出标记',
@@ -32,6 +37,7 @@ let browseRequest;
 let nasRequest;
 let parentFolder;
 let toastTimer;
+let feedbackEditor;
 
 const state = {
   folder: '',
@@ -41,6 +47,7 @@ const state = {
   loading: true,
   problem: '',
   usageProblem: '',
+  feedbackProblem: '',
   skipped: 0,
   page: 0,
 };
@@ -62,10 +69,12 @@ function icon(name) {
   return svg;
 }
 
-async function api(route, params, { signal, method = 'GET' } = {}) {
+async function api(route, params, { signal, method = 'GET', body } = {}) {
   const url = new URL('/api/' + route, location.origin);
   for (const [name, value] of Object.entries(params ?? {})) url.searchParams.set(name, value);
-  const response = await fetch(url, { headers: { 'X-GemCrew-Console': '1' }, signal, method });
+  const headers = { 'X-GemCrew-Console': '1' };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const response = await fetch(url, { headers, signal, method, body: JSON.stringify(body) });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error);
   return data;
@@ -96,7 +105,7 @@ function showFolderError(message = '') {
 async function loadDirectory(folder, includeSubfolders, { fromDialog = false, keepFilters = false } = {}) {
   scanRequest?.controller.abort();
   const controller = new AbortController();
-  scanRequest = { controller, fromDialog, usageUpdates: new Map() };
+  scanRequest = { controller, fromDialog, usageUpdates: new Map(), feedbackUpdates: new Map() };
   if (!state.folder) {
     state.requestedPath = folder;
     state.recursive = includeSubfolders;
@@ -119,8 +128,10 @@ async function loadDirectory(folder, includeSubfolders, { fromDialog = false, ke
     state.images = data.images;
     for (const asset of state.images) {
       asset.used = scanRequest.usageUpdates.get(asset.absolute) ?? asset.used;
+      asset.feedback = scanRequest.feedbackUpdates.get(asset.absolute) ?? asset.feedback;
     }
     state.usageProblem = data.usageProblem;
+    state.feedbackProblem = data.feedbackProblem;
     state.recursive = includeSubfolders;
     state.skipped = data.skipped;
     state.page = 0;
@@ -273,7 +284,7 @@ function renderGallery() {
   const warning = byId('scan-warning');
   const scanProblem = state.folder && state.problem ? state.problem :
     state.skipped ? '有 ' + state.skipped + ' 个子目录无法读取。' : '';
-  warning.textContent = [scanProblem, state.usageProblem].filter(Boolean).join(' ');
+  warning.textContent = [scanProblem, state.usageProblem, state.feedbackProblem].filter(Boolean).join(' ');
   warning.hidden = warning.textContent === '';
 
   const pages = Math.ceil(matches.length / pageSize);
@@ -324,6 +335,7 @@ function renderCard(asset) {
   const copy = card.querySelector('.copy-button');
   copy.title = asset.absolute;
   copy.addEventListener('click', () => copyPath(asset.absolute, copy));
+  card.querySelector('.asset-actions').prepend(...feedbackButtons(asset));
   bindPreview(card.querySelector('img'), card.querySelector('.preview-fallback'), asset,
     card.querySelector('.asset-dimensions'));
   return card;
@@ -360,7 +372,7 @@ function openDetail(asset) {
   button.append(icon('copy'), element('span', '', '复制路径'));
   button.addEventListener('click', () => copyPath(asset.absolute, button));
   const actions = element('div', 'detail-actions');
-  actions.append(button, usageButton(asset));
+  actions.append(button, usageButton(asset), ...feedbackButtons(asset));
   info.append(fields, pathGroup, actions);
   detailBody.replaceChildren(stage, info);
   bindPreview(image, fallback, asset, dimensions);
@@ -411,6 +423,93 @@ async function toggleUsage(asset, button) {
   } finally {
     pendingUsage.delete(absolute);
     refreshUsageButtons(state.images.find(entry => entry.absolute === absolute) ?? asset);
+  }
+}
+
+function paintFeedbackButton(button, asset) {
+  const type = button.dataset.feedbackType;
+  const saved = asset.feedback?.[type] !== undefined;
+  const label = feedbackLabels[type];
+  button.disabled = !config.feedbackLimits?.[type] || Boolean(state.feedbackProblem);
+  button.dataset.saved = String(saved);
+  button.setAttribute('aria-label', saved ? '编辑' + label : label);
+  button.replaceChildren(icon(saved ? 'check' : 'comment'), element('span', '', label));
+}
+
+function feedbackButtons(asset) {
+  return Object.keys(feedbackLabels).map(type => {
+    const button = element('button', 'button feedback-button');
+    button.type = 'button';
+    button.dataset.assetPath = asset.absolute;
+    button.dataset.feedbackType = type;
+    paintFeedbackButton(button, asset);
+    button.addEventListener('click', () => openFeedback(asset, type, button));
+    return button;
+  });
+}
+
+function showFeedbackError(message = '') {
+  const error = byId('feedback-error');
+  error.textContent = message;
+  error.hidden = !message;
+}
+
+function updateFeedbackForm() {
+  const { limit, saving } = feedbackEditor;
+  const count = Array.from(feedbackComment.value).length;
+  const overLimit = count > limit;
+  const counter = byId('feedback-count');
+  counter.textContent = count + ' / ' + limit + ' 字';
+  counter.dataset.overLimit = String(overLimit);
+  feedbackComment.setAttribute('aria-invalid', String(overLimit));
+  feedbackComment.disabled = saving;
+  feedbackSave.disabled = saving || overLimit;
+  feedbackSave.textContent = saving ? '正在保存…' : '保存反馈';
+  feedbackRemove.disabled = saving;
+  for (const button of feedbackDialog.querySelectorAll('[data-close]')) button.disabled = saving;
+}
+
+function openFeedback(asset, type, button) {
+  const current = state.images.find(entry => entry.absolute === asset.absolute) ?? asset;
+  const comment = current.feedback?.[type];
+  feedbackEditor = { asset, button, type, limit: config.feedbackLimits[type], saving: false };
+  byId('feedback-heading').textContent = feedbackLabels[type];
+  byId('feedback-asset').textContent = current.name;
+  feedbackComment.value = comment ?? '';
+  feedbackRemove.hidden = comment === undefined;
+  showFeedbackError();
+  updateFeedbackForm();
+  feedbackDialog.showModal();
+}
+
+async function submitFeedback(comment) {
+  const editor = feedbackEditor;
+  if (!editor || editor.saving || (comment !== null && Array.from(comment).length > editor.limit)) return;
+  const { asset, button, type } = editor;
+  const current = state.images.find(entry => entry.absolute === asset.absolute) ?? asset;
+  editor.saving = true;
+  showFeedbackError();
+  updateFeedbackForm();
+  try {
+    const route = 'feedback' + current.url.slice('/image'.length);
+    const { feedback } = await api(route, undefined, { method: 'PUT', body: { type, comment } });
+    asset.feedback = feedback;
+    current.feedback = feedback;
+    scanRequest?.feedbackUpdates.set(asset.absolute, feedback);
+    const visible = state.images.find(entry => entry.absolute === asset.absolute);
+    if (visible) visible.feedback = feedback;
+    for (const action of document.querySelectorAll('.feedback-button')) {
+      if (action.dataset.assetPath === asset.absolute) paintFeedbackButton(action, asset);
+    }
+    feedbackDialog.close();
+    showToast(comment === null ? '已移除反馈' : '已保存反馈', button);
+  } catch (error) {
+    showFeedbackError(error.message);
+  } finally {
+    if (feedbackEditor === editor) {
+      editor.saving = false;
+      updateFeedbackForm();
+    }
   }
 }
 
@@ -598,6 +697,19 @@ folderDialog.addEventListener('close', () => {
   if (scanRequest?.fromDialog) scanRequest.controller.abort();
 });
 detailDialog.addEventListener('close', () => detailBody.replaceChildren());
+feedbackComment.addEventListener('input', () => {
+  showFeedbackError();
+  updateFeedbackForm();
+});
+byId('feedback-form').addEventListener('submit', event => {
+  event.preventDefault();
+  submitFeedback(feedbackComment.value);
+});
+feedbackRemove.addEventListener('click', () => submitFeedback(null));
+feedbackDialog.addEventListener('cancel', event => {
+  if (feedbackEditor?.saving) event.preventDefault();
+});
+feedbackDialog.addEventListener('close', () => { feedbackEditor = undefined; });
 
 async function initialize() {
   renderGallery();
