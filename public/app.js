@@ -76,7 +76,7 @@ async function api(route, params, { signal, method = 'GET', body } = {}) {
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const response = await fetch(url, { headers, signal, method, body: JSON.stringify(body) });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error);
+  if (!response.ok) throw Object.assign(new Error(data.error), { data });
   return data;
 }
 
@@ -325,7 +325,8 @@ function renderCard(asset) {
   card.querySelector('.thumbnail-format').textContent = asset.extension.slice(1).toUpperCase();
   const name = card.querySelector('.asset-name');
   name.textContent = asset.name;
-  name.title = asset.absolute;
+  name.dataset.assetPath = asset.absolute;
+  name.title = copyBlockedMessage(asset) ? asset.name : asset.absolute;
   name.addEventListener('click', () => openDetail(asset));
   const location = card.querySelector('.asset-location');
   if (asset.relative !== asset.name) {
@@ -333,8 +334,7 @@ function renderCard(asset) {
     location.title = location.textContent;
   }
   const copy = card.querySelector('.copy-button');
-  copy.title = asset.absolute;
-  copy.addEventListener('click', () => copyPath(asset.absolute, copy));
+  bindCopyButton(copy, asset);
   card.querySelector('.asset-actions').prepend(...feedbackButtons(asset));
   bindPreview(card.querySelector('img'), card.querySelector('.preview-fallback'), asset,
     card.querySelector('.asset-dimensions'));
@@ -363,14 +363,16 @@ function openDetail(asset) {
   const label = element('label', '', '资源路径');
   const pathInput = element('input');
   pathInput.id = label.htmlFor = 'detail-path';
-  pathInput.value = pathInput.title = asset.absolute;
   pathInput.readOnly = true;
-  pathGroup.append(label, pathInput);
+  const pathMessage = element('p', 'detail-path-message');
+  pathGroup.dataset.assetPath = asset.absolute;
+  pathGroup.append(label, pathInput, pathMessage);
+  paintDetailPath(pathGroup, asset);
 
   const button = element('button', 'button copy-button');
   button.type = 'button';
   button.append(icon('copy'), element('span', '', '复制路径'));
-  button.addEventListener('click', () => copyPath(asset.absolute, button));
+  bindCopyButton(button, asset);
   const actions = element('div', 'detail-actions');
   actions.append(button, usageButton(asset), ...feedbackButtons(asset));
   info.append(fields, pathGroup, actions);
@@ -433,7 +435,8 @@ function paintFeedbackButton(button, asset) {
   button.disabled = !config.feedbackLimits?.[type] || Boolean(state.feedbackProblem);
   button.dataset.saved = String(saved);
   button.setAttribute('aria-label', saved ? '编辑' + label : label);
-  button.replaceChildren(icon(saved ? 'check' : 'comment'), element('span', '', label));
+  const symbol = type === 'unusable' ? 'bookmark' : 'comment';
+  button.replaceChildren(icon(saved ? 'check' : symbol), element('span', '', label));
 }
 
 function feedbackButtons(asset) {
@@ -455,7 +458,7 @@ function showFeedbackError(message = '') {
 }
 
 function updateFeedbackForm() {
-  const { limit, saving } = feedbackEditor;
+  const { limit, saving, type, marked } = feedbackEditor;
   const count = Array.from(feedbackComment.value).length;
   const overLimit = count > limit;
   const counter = byId('feedback-count');
@@ -464,7 +467,8 @@ function updateFeedbackForm() {
   feedbackComment.setAttribute('aria-invalid', String(overLimit));
   feedbackComment.disabled = saving;
   feedbackSave.disabled = saving || overLimit;
-  feedbackSave.textContent = saving ? '正在保存…' : '保存反馈';
+  const saveLabel = type === 'unusable' ? (marked ? '保存评论' : '标记为不可使用') : '保存反馈';
+  feedbackSave.textContent = saving ? '正在保存…' : saveLabel;
   feedbackRemove.disabled = saving;
   for (const button of feedbackDialog.querySelectorAll('[data-close]')) button.disabled = saving;
 }
@@ -472,11 +476,13 @@ function updateFeedbackForm() {
 function openFeedback(asset, type, button) {
   const current = state.images.find(entry => entry.absolute === asset.absolute) ?? asset;
   const comment = current.feedback?.[type];
-  feedbackEditor = { asset, button, type, limit: config.feedbackLimits[type], saving: false };
+  feedbackEditor = { asset, button, type, marked: comment !== undefined, limit: config.feedbackLimits[type], saving: false };
   byId('feedback-heading').textContent = feedbackLabels[type];
   byId('feedback-asset').textContent = current.name;
+  byId('feedback-copy-note').hidden = type !== 'unusable';
   feedbackComment.value = comment ?? '';
   feedbackRemove.hidden = comment === undefined;
+  feedbackRemove.textContent = type === 'unusable' ? '取消不可使用标记' : '移除反馈';
   showFeedbackError();
   updateFeedbackForm();
   feedbackDialog.showModal();
@@ -493,16 +499,12 @@ async function submitFeedback(comment) {
   try {
     const route = 'feedback' + current.url.slice('/image'.length);
     const { feedback } = await api(route, undefined, { method: 'PUT', body: { type, comment } });
-    asset.feedback = feedback;
-    current.feedback = feedback;
-    scanRequest?.feedbackUpdates.set(asset.absolute, feedback);
-    const visible = state.images.find(entry => entry.absolute === asset.absolute);
-    if (visible) visible.feedback = feedback;
-    for (const action of document.querySelectorAll('.feedback-button')) {
-      if (action.dataset.assetPath === asset.absolute) paintFeedbackButton(action, asset);
-    }
+    applyAssetFeedback(asset, feedback);
     feedbackDialog.close();
-    showToast(comment === null ? '已移除反馈' : '已保存反馈', button);
+    const message = type === 'unusable'
+      ? (comment === null ? '已取消不可使用标记' : (editor.marked ? '已保存评论' : '已标记为不可使用'))
+      : (comment === null ? '已移除反馈' : '已保存反馈');
+    showToast(message, button);
   } catch (error) {
     showFeedbackError(error.message);
   } finally {
@@ -513,7 +515,68 @@ async function submitFeedback(comment) {
   }
 }
 
-async function copyPath(path, button) {
+function copyBlockedMessage(asset) {
+  if (asset.feedback?.unusable !== undefined) return '已标记为不可使用，无法复制路径。';
+  return state.feedbackProblem ? '反馈状态暂时无法读取，无法复制路径。' : '';
+}
+
+function paintCopyButton(button, asset) {
+  const blocked = copyBlockedMessage(asset);
+  button.disabled = Boolean(blocked);
+  button.dataset.blocked = String(Boolean(blocked));
+  button.title = blocked || asset.absolute;
+  if (blocked && button.classList.contains('is-copied')) {
+    button.classList.remove('is-copied');
+    button.replaceChildren(icon('copy'), element('span', '', '复制路径'));
+  }
+}
+
+function bindCopyButton(button, asset) {
+  button.dataset.assetPath = asset.absolute;
+  paintCopyButton(button, asset);
+  button.addEventListener('click', () => copyPath(asset, button));
+}
+
+function paintDetailPath(group, asset) {
+  const blocked = copyBlockedMessage(asset);
+  const input = group.querySelector('input');
+  const message = group.querySelector('.detail-path-message');
+  input.value = input.title = blocked ? '' : asset.absolute;
+  input.hidden = Boolean(blocked);
+  message.textContent = blocked;
+  message.hidden = !blocked;
+}
+
+function applyAssetFeedback(asset, feedback) {
+  const absolute = asset.absolute;
+  asset.feedback = feedback;
+  scanRequest?.feedbackUpdates.set(absolute, feedback);
+  const visible = state.images.find(entry => entry.absolute === absolute);
+  if (visible) visible.feedback = feedback;
+  for (const button of document.querySelectorAll('.feedback-button, .copy-button, .asset-name')) {
+    if (button.dataset.assetPath !== absolute) continue;
+    if (button.classList.contains('feedback-button')) paintFeedbackButton(button, asset);
+    else if (button.classList.contains('copy-button')) paintCopyButton(button, asset);
+    else button.title = copyBlockedMessage(asset) ? asset.name : absolute;
+  }
+  const pathGroup = detailBody.querySelector('.detail-path');
+  if (pathGroup?.dataset.assetPath === absolute) paintDetailPath(pathGroup, asset);
+}
+
+async function copyPath(asset, button) {
+  let path;
+  try {
+    const current = state.images.find(entry => entry.absolute === asset.absolute) ?? asset;
+    if (copyBlockedMessage(current)) return;
+    const route = 'copy' + current.url.slice('/image'.length);
+    ({ path } = await api(route));
+    const latest = state.images.find(entry => entry.absolute === asset.absolute) ?? asset;
+    if (copyBlockedMessage(latest)) return;
+  } catch (error) {
+    if (error.data?.feedback) applyAssetFeedback(asset, error.data.feedback);
+    showToast(error.message === 'Failed to fetch' ? '复制失败，请检查素材库连接。' : error.message, button);
+    return;
+  }
   try {
     try {
       await navigator.clipboard.writeText(path);

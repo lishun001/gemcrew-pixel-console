@@ -305,6 +305,15 @@ async function handleFeedback(request, response, asset) {
   return sendJson(response, 200, { feedback: await saveFeedback(asset.absolute, type, comment) });
 }
 
+async function handleCopy(response, asset) {
+  await feedbackWrites;
+  const feedback = (await readFeedback()).get(asset.absolute) ?? {};
+  if (Object.hasOwn(feedback, 'unusable')) {
+    return sendJson(response, 403, { error: '已标记为不可使用，无法复制路径。', feedback });
+  }
+  return sendJson(response, 200, { path: asset.absolute });
+}
+
 async function absoluteFolder(value) {
   const folder = value?.trim();
   if (!folder || !path.isAbsolute(folder)) {
@@ -471,12 +480,14 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/api/nas') return await handleNas(request, response, url);
 
-    const update = /^\/api\/(usage|feedback)\/([a-f0-9-]+)\/(\d+)$/.exec(url.pathname);
-    if (update) {
-      if (request.method !== 'PUT') return sendJson(response, 405, { error: '请求方式无效。' });
-      const [, action, scanId, index] = update;
+    const assetAction = /^\/api\/(usage|feedback|copy)\/([a-f0-9-]+)\/(\d+)$/.exec(url.pathname);
+    if (assetAction) {
+      const [, action, scanId, index] = assetAction;
+      const method = action === 'copy' ? 'GET' : 'PUT';
+      if (request.method !== method) return sendJson(response, 405, { error: '请求方式无效。' });
       const asset = scans.get(scanId)?.images[Number(index)];
       if (!asset) return sendJson(response, 404, { error: '图片已失效，请刷新目录。' });
+      if (action === 'copy') return await handleCopy(response, asset);
       if (action === 'feedback') return await handleFeedback(request, response, asset);
       const value = url.searchParams.get('used');
       if (value !== '1' && value !== '0') return sendJson(response, 400, { error: '使用状态无效。' });

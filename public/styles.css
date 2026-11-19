@@ -271,6 +271,7 @@ h1, h2, p { margin: 0; }
 .asset-dimensions:not(:empty) + .asset-location:not(:empty)::before { content: "· "; }
 .copy-button { flex: none; color: var(--secondary); font-size: 12px; }
 .copy-button.is-copied { color: var(--green); border-color: #527b68; }
+.copy-button[data-blocked="true"] { color: var(--muted); }
 .usage-button { color: var(--secondary); font-size: 12px; }
 .asset-stage .usage-button { position: absolute; right: 11px; bottom: 11px; min-height: 31px; padding: 0 8px; background: #151921f5; }
 .usage-button[aria-pressed="true"] { color: var(--green); background: #1b3029; border-color: #527b68; }
@@ -313,6 +314,9 @@ dialog::backdrop { background: #080a10bb; }
 .dialog-header h2 { font-size: 17px; letter-spacing: -.02em; }
 .folder-dialog form, .nas-dialog form, .feedback-dialog form { padding: 16px; }
 .feedback-asset { margin: 0 0 16px; color: var(--secondary); font: 12px var(--mono); overflow-wrap: anywhere; }
+.feedback-copy-note, .detail-path-message { color: var(--danger); font-size: 12px; line-height: 1.5; }
+.feedback-copy-note { margin: 0 0 12px; }
+.detail-path-message { margin: 0; }
 .feedback-label { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .feedback-label span { color: var(--secondary); font-size: 12px; }
 .feedback-label span[data-over-limit="true"], .remove-feedback { color: var(--danger); }
